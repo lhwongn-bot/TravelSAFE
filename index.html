@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Travel Save List (with GitHub Cloud Sync)</title>
+    <title>Travel Save List (with GitHub Cloud Auto Sync)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -124,8 +124,8 @@
 <body>
     <h1>Travel Save List 🌍</h1>
     <div class="note">
-        <b>Cloud Sync:</b> Enter your GitHub Personal Access Token to load/save your list from your repo.<br>
-        <b>Token is stored in memory only and never uploaded.</b> <br>
+        <b>Cloud Sync:</b> Enter your GitHub Personal Access Token to sync your list with your repo.<br>
+        <b>Token is stored in memory only and never uploaded or saved to disk.</b> <br>
         <a href="https://github.com/settings/tokens" target="_blank">Generate a GitHub token</a> with <code>public_repo</code> scope.<br>
         <b>For your personal use only!</b>
     </div>
@@ -134,9 +134,6 @@
         <input type="password" id="githubToken" placeholder="Paste your GitHub PAT here" autocomplete="off">
         <button onclick="setToken()">Set Token</button>
         <button onclick="removeToken()">Remove Token</button>
-        <br><br>
-        <button onclick="loadFromGitHub()">Load from GitHub</button>
-        <button onclick="saveToGitHub()">Save to GitHub</button>
         <span id="cloudStatus" class="note"></span>
     </div>
 
@@ -176,7 +173,6 @@
         <tbody id="travelTableBody"></tbody>
     </table>
     <div class="controls">
-        <button class="save-btn" onclick="saveTimetable()">Save Locally</button>
         <button class="clear-btn" onclick="clearTimetable()">Clear Local</button>
         <button class="save-btn" onclick="exportToFile()">Export</button>
         <button class="save-btn" onclick="document.getElementById('importFile').click()">Import</button>
@@ -188,14 +184,15 @@
         const githubUsername = "lhwongn-bot";
         const githubRepo = "TravelSAFE";
         const githubFilePath = "travel-save-list.json";
-        // Token is held in memory only
         let githubToken = "";
+        let lastGitHubSha = null; // for update operations
 
         // ---- Cloud Sync Token Management ----
         function setToken() {
             githubToken = document.getElementById('githubToken').value.trim();
             if (githubToken) {
-                document.getElementById('cloudStatus').textContent = "Token set in memory.";
+                document.getElementById('cloudStatus').textContent = "Token set in memory. Loading from GitHub...";
+                autoLoadFromGitHub();
             } else {
                 document.getElementById('cloudStatus').textContent = "No token set!";
             }
@@ -205,9 +202,12 @@
             document.getElementById('githubToken').value = "";
             document.getElementById('cloudStatus').textContent = "Token cleared from memory.";
         }
+        function setStatus(msg) {
+            document.getElementById('cloudStatus').textContent = msg;
+        }
 
         // ---- Cloud Sync Functions ----
-        async function loadFromGitHub() {
+        async function autoLoadFromGitHub() {
             setStatus("Loading from GitHub...");
             if (!githubToken) { setStatus("Token required!"); return; }
             const url = `https://api.github.com/repos/${githubUsername}/${githubRepo}/contents/${githubFilePath}`;
@@ -215,32 +215,42 @@
                 const response = await fetch(url, {
                     headers: { "Authorization": `token ${githubToken}` }
                 });
-                if (!response.ok) { setStatus("Failed to load from GitHub."); return; }
+                if (!response.ok) { 
+                    setStatus("No data from GitHub yet. Start adding destinations!");
+                    originalData = [];
+                    renderTable(originalData);
+                    updateCountryFilter();
+                    return; 
+                }
                 const data = await response.json();
+                lastGitHubSha = data.sha;
                 const content = atob(data.content.replace(/\n/g, ""));
                 localStorage.setItem('travelSaveList', content);
-                loadTimetable();
+                originalData = JSON.parse(content || "[]");
+                renderTable(originalData);
                 updateCountryFilter();
                 setStatus("Loaded from GitHub!");
             } catch (e) {
                 setStatus("Failed to load from GitHub.");
             }
         }
-        async function saveToGitHub() {
+        async function autoSaveToGitHub() {
+            if (!githubToken) return;
             setStatus("Saving to GitHub...");
-            if (!githubToken) { setStatus("Token required!"); return; }
             const url = `https://api.github.com/repos/${githubUsername}/${githubRepo}/contents/${githubFilePath}`;
-            let sha = null;
-            try {
-                const response = await fetch(url, {
-                    headers: { "Authorization": `token ${githubToken}` }
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    sha = data.sha;
-                }
-            } catch (e) {} // ignore if file doesn't exist
-            const content = btoa(unescape(encodeURIComponent(localStorage.getItem('travelSaveList') || "[]")));
+            // Try to get the latest SHA if we don't have it
+            if (!lastGitHubSha) {
+                try {
+                    const response = await fetch(url, {
+                        headers: { "Authorization": `token ${githubToken}` }
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        lastGitHubSha = data.sha;
+                    }
+                } catch (e) {}
+            }
+            const content = btoa(unescape(encodeURIComponent(JSON.stringify(originalData || [], null, 2))));
             const result = await fetch(url, {
                 method: "PUT",
                 headers: {
@@ -248,19 +258,18 @@
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    message: "Cloud sync TravelSAFE list",
+                    message: "Auto-sync TravelSAFE list",
                     content: content,
-                    ...(sha ? { sha } : {})
+                    ...(lastGitHubSha ? { sha: lastGitHubSha } : {})
                 })
             });
             if (result.ok) {
-                setStatus("Saved to GitHub!");
+                const data = await result.json();
+                lastGitHubSha = data.content.sha;
+                setStatus("Auto-saved to GitHub!");
             } else {
                 setStatus("Failed to save to GitHub.");
             }
-        }
-        function setStatus(msg) {
-            document.getElementById('cloudStatus').textContent = msg;
         }
 
         // ---- Local App ----
@@ -268,8 +277,14 @@
         let originalData = [];
 
         document.addEventListener('DOMContentLoaded', () => {
-            loadTimetable();
-            updateCountryFilter();
+            // Only auto-load if the user already set a token this session
+            if (githubToken) {
+                autoLoadFromGitHub();
+            } else {
+                // fallback: load from local
+                loadTimetable();
+                updateCountryFilter();
+            }
         });
 
         function addEntry() {
@@ -284,53 +299,44 @@
                 return;
             }
 
-            const tableBody = document.getElementById('travelTableBody');
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td><input type="checkbox" onchange="toggleCompleted(this)"></td>
-                <td>${continent}</td>
-                <td>${country}</td>
-                <td>${location}</td>
-                <td>${famous}</td>
-                <td>${links ? `<a href="${links}" target="_blank">Link</a>` : '-'}</td>
-                <td class="actions"><button onclick="deleteRow(this)">Delete</button></td>
-            `;
-            tableBody.appendChild(row);
+            const entry = {
+                completed: false,
+                continent,
+                country,
+                location,
+                famous,
+                links: links || ''
+            };
+            originalData.push(entry);
+            renderTable(originalData);
+            saveTimetable(); // also triggers auto sync
+            updateCountryFilter();
 
+            // Clear form
             document.getElementById('continent').value = '';
             document.getElementById('country').value = '';
             document.getElementById('location').value = '';
             document.getElementById('famous').value = '';
             document.getElementById('links').value = '';
-
-            saveTimetable();
-            updateCountryFilter();
         }
 
-        function toggleCompleted(checkbox) {
-            const row = checkbox.parentElement.parentElement;
-            row.style.textDecoration = checkbox.checked ? 'line-through' : 'none';
-            saveTimetable();
+        function toggleCompleted(checkbox, idx) {
+            originalData[idx].completed = checkbox.checked;
+            renderTable(originalData);
+            saveTimetable(); // auto sync
         }
 
-        function deleteRow(button) {
-            button.parentElement.parentElement.remove();
-            saveTimetable();
+        function deleteRow(idx) {
+            if (!confirm('Delete this destination?')) return;
+            originalData.splice(idx, 1);
+            renderTable(originalData);
+            saveTimetable(); // auto sync
             updateCountryFilter();
         }
 
         function saveTimetable() {
-            const tableBody = document.getElementById('travelTableBody');
-            const rows = Array.from(tableBody.getElementsByTagName('tr'));
-            originalData = rows.map(row => ({
-                completed: row.cells[0].querySelector('input').checked,
-                continent: row.cells[1].textContent,
-                country: row.cells[2].textContent,
-                location: row.cells[3].textContent,
-                famous: row.cells[4].textContent,
-                links: row.cells[5].textContent === '-' ? '' : row.cells[5].querySelector('a')?.href || ''
-            }));
             localStorage.setItem('travelSaveList', JSON.stringify(originalData));
+            autoSaveToGitHub();
         }
 
         function loadTimetable() {
@@ -341,16 +347,16 @@
         function renderTable(data) {
             const tableBody = document.getElementById('travelTableBody');
             tableBody.innerHTML = '';
-            data.forEach(entry => {
+            data.forEach((entry, idx) => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><input type="checkbox" ${entry.completed ? 'checked' : ''} onchange="toggleCompleted(this)"></td>
+                    <td><input type="checkbox" ${entry.completed ? 'checked' : ''} onchange="toggleCompleted(this, ${idx})"></td>
                     <td>${entry.continent}</td>
                     <td>${entry.country}</td>
                     <td>${entry.location}</td>
                     <td>${entry.famous}</td>
                     <td>${entry.links ? `<a href="${entry.links}" target="_blank">Link</a>` : '-'}</td>
-                    <td class="actions"><button onclick="deleteRow(this)">Delete</button></td>
+                    <td class="actions"><button onclick="deleteRow(${idx})">Delete</button></td>
                 `;
                 if (entry.completed) {
                     row.style.textDecoration = 'line-through';
@@ -397,9 +403,10 @@
 
         function clearTimetable() {
             if (confirm('Are you sure you want to clear the entire travel list?')) {
-                document.getElementById('travelTableBody').innerHTML = '';
-                localStorage.removeItem('travelSaveList');
                 originalData = [];
+                renderTable(originalData);
+                localStorage.removeItem('travelSaveList');
+                autoSaveToGitHub();
                 updateCountryFilter();
             }
         }
@@ -421,8 +428,9 @@
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
-                    localStorage.setItem('travelSaveList', e.target.result);
-                    loadTimetable();
+                    originalData = JSON.parse(e.target.result);
+                    renderTable(originalData);
+                    saveTimetable();
                     updateCountryFilter();
                     alert('Imported successfully!');
                 } catch {
@@ -432,6 +440,17 @@
             reader.readAsText(file);
         }
 
+        // Expose some functions for inline event handlers
+        window.addEntry = addEntry;
+        window.toggleCompleted = toggleCompleted;
+        window.deleteRow = deleteRow;
+        window.sortTable = sortTable;
+        window.exportToFile = exportToFile;
+        window.importFromFile = importFromFile;
+        window.filterByCountry = filterByCountry;
+        window.clearTimetable = clearTimetable;
+        window.setToken = setToken;
+        window.removeToken = removeToken;
     </script>
 </body>
 </html>
