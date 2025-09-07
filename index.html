@@ -1,0 +1,348 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Travel Save List</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .form-container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .form-container input, .form-container select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .form-container button {
+            background-color: #28a745;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .form-container button:hover {
+            background-color: #218838;
+        }
+        .filter-container {
+            margin-bottom: 20px;
+        }
+        .filter-container select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        th:hover {
+            background-color: #0056b3;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        .actions button {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .actions button:hover {
+            background: #c82333;
+        }
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        .controls button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .save-btn {
+            background-color: #007bff;
+            color: white;
+        }
+        .save-btn:hover {
+            background-color: #0056b3;
+        }
+        .clear-btn {
+            background-color: #6c757d;
+            color: white;
+        }
+        .clear-btn:hover {
+            background-color: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    <h1>Travel Save List</h1>
+    <div class="form-container">
+        <select id="continent" required>
+            <option value="" disabled selected>Select Continent</option>
+            <option value="Africa">Africa</option>
+            <option value="Asia">Asia</option>
+            <option value="Australia">Australia</option>
+            <option value="Europe">Europe</option>
+            <option value="North America">North America</option>
+            <option value="South America">South America</option>
+        </select>
+        <input type="text" id="country" placeholder="Country" required>
+        <input type="text" id="location" placeholder="Location" required>
+        <input type="text" id="famous" placeholder="Famous Shop/Store/Food" required>
+        <input type="url" id="links" placeholder="Links (e.g., https://example.com)">
+        <button onclick="addEntry()">Add Destination</button>
+    </div>
+    <div class="filter-container">
+        <select id="countryFilter" onchange="filterByCountry()">
+            <option value="">All Countries</option>
+        </select>
+    </div>
+    <table id="travelTable">
+        <thead>
+            <tr>
+                <th onclick="sortTable(0, 'checkbox')">Completed</th>
+                <th onclick="sortTable(1, 'text')">Continent</th>
+                <th onclick="sortTable(2, 'text')">Country</th>
+                <th onclick="sortTable(3, 'text')">Location</th>
+                <th onclick="sortTable(4, 'text')">Famous Shop/Store/Food</th>
+                <th>Links</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="travelTableBody"></tbody>
+    </table>
+    <div class="controls">
+        <button class="save-btn" onclick="saveTimetable()">Save Timetable</button>
+        <button class="clear-btn" onclick="clearTimetable()">Clear Timetable</button>
+    </div>
+
+    <script>
+        let sortDirection = {};
+        let originalData = [];
+
+        // Load saved entries and populate country filter on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTimetable();
+            updateCountryFilter();
+        });
+
+        function addEntry() {
+            const continent = document.getElementById('continent').value;
+            const country = document.getElementById('country').value;
+            const location = document.getElementById('location').value;
+            const famous = document.getElementById('famous').value;
+            const links = document.getElementById('links').value;
+
+            if (!continent || !country || !location || !famous) {
+                alert('Please fill in all required fields.');
+                return;
+            }
+
+            const tableBody = document.getElementById('travelTableBody');
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td><input type="checkbox" onchange="toggleCompleted(this)"></td>
+                <td>${continent}</td>
+                <td>${country}</td>
+                <td>${location}</td>
+                <td>${famous}</td>
+                <td>${links ? `<a href="${links}" target="_blank">Link</a>` : '-'}</td>
+                <td class="actions"><button onclick="deleteRow(this)">Delete</button></td>
+            `;
+            tableBody.appendChild(row);
+
+            // Clear form inputs
+            document.getElementById('continent').value = '';
+            document.getElementById('country').value = '';
+            document.getElementById('location').value = '';
+            document.getElementById('famous').value = '';
+            document.getElementById('links').value = '';
+
+            saveTimetable();
+            updateCountryFilter();
+        }
+
+        function toggleCompleted(checkbox) {
+            const row = checkbox.parentElement.parentElement;
+            row.style.textDecoration = checkbox.checked ? 'line-through' : 'none';
+            saveTimetable();
+        }
+
+        function deleteRow(button) {
+            button.parentElement.parentElement.remove();
+            saveTimetable();
+            updateCountryFilter();
+        }
+
+        function saveTimetable() {
+            const tableBody = document.getElementById('travelTableBody');
+            const rows = Array.from(tableBody.getElementsByTagName('tr'));
+            originalData = rows.map(row => ({
+                completed: row.cells[0].querySelector('input').checked,
+                continent: row.cells[1].textContent,
+                country: row.cells[2].textContent,
+                location: row.cells[3].textContent,
+                famous: row.cells[4].textContent,
+                links: row.cells[5].textContent === '-' ? '' : row.cells[5].querySelector('a')?.href || ''
+            }));
+            localStorage.setItem('travelSaveList', JSON.stringify(originalData));
+        }
+
+        function loadTimetable() {
+            originalData = JSON.parse(localStorage.getItem('travelSaveList') || '[]');
+            renderTable(originalData);
+        }
+
+        function renderTable(data) {
+            const tableBody = document.getElementById('travelTableBody');
+            tableBody.innerHTML = '';
+            data.forEach(entry => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><input type="checkbox" ${entry.completed ? 'checked' : ''} onchange="toggleCompleted(this)"></td>
+                    <td>${entry.continent}</td>
+                    <td>${entry.country}</td>
+                    <td>${entry.location}</td>
+                    <td>${entry.famous}</td>
+                    <td>${entry.links ? `<a href="${entry.links}" target="_blank">Link</a>` : '-'}</td>
+                    <td class="actions"><button onclick="deleteRow(this)">Delete</button></td>
+                `;
+                if (entry.completed) {
+                    row.style.textDecoration = 'line-through';
+                }
+                tableBody.appendChild(row);
+            });
+        }
+
+        function updateCountryFilter() {
+            const countryFilter = document.getElementById('countryFilter');
+            const countries = [...new Set(originalData.map(entry => entry.country))].sort();
+            countryFilter.innerHTML = '<option value="">All Countries</option>';
+            countries.forEach(country => {
+                const option = document.createElement('option');
+                option.value = country;
+                option.textContent = country;
+                countryFilter.appendChild(option);
+            });
+        }
+
+        function filterByCountry() {
+            const countryFilter = document.getElementById('countryFilter').value;
+            if (!countryFilter) {
+                renderTable(originalData);
+            } else {
+                const filteredData = originalData.filter(entry => entry.country === countryFilter);
+                renderTable(filteredData);
+            }
+        }
+
+        function sortTable(columnIndex, type) {
+            const tableBody = document.getElementById('travelTableBody');
+            const rows = Array.from(tableBody.getElementsByTagName('tr'));
+            const key = ['completed', 'continent', 'country', 'location', 'famous'][columnIndex];
+            sortDirection[key] = !sortDirection[key]; // Toggle sort direction
+
+            const sortedData = originalData.slice().sort((a, b) => {
+                let valA = type === 'checkbox' ? a[key] : a[key].toLowerCase();
+                let valB = type === 'checkbox' ? b[key] : b[key].toLowerCase();
+                if (type === 'checkbox') {
+                    return sortDirection[key] ? (valA === valB ? 0 : valA ? -1 : 1) : (valA === valB ? 0 : valB ? -1 : 1);
+                }
+                return sortDirection[key] ? valA.localeCompare(valB) : valB.localeCompare(valA);
+            });
+
+            renderTable(sortedData);
+        }
+
+        function clearTimetable() {
+            if (confirm('Are you sure you want to clear the entire travel list?')) {
+                document.getElementById('travelTableBody').innerHTML = '';
+                localStorage.removeItem('travelSaveList');
+                originalData = [];
+                updateCountryFilter();
+            }
+        }
+    </script>
+</body>
+</html>
