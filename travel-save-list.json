@@ -2,14 +2,6 @@
   {
     "completed": false,
     "continent": "Asia",
-    "country": "Japan",
-    "location": "Tokyo",
-    "famous": "sushi",
-    "links": ""
-  },
-  {
-    "completed": false,
-    "continent": "Asia",
     "country": "Tai wan",
     "location": "Tai pei",
     "famous": "Melon tea",
