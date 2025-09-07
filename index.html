@@ -1,50 +1,9 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Travel Save List</title>
+    <title>Travel Save List (with GitHub Cloud Sync)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -57,7 +16,9 @@
             text-align: center;
             color: #333;
         }
-        .form-container {
+        .form-container,
+        .controls, 
+        .cloud-sync {
             background: #fff;
             padding: 20px;
             border-radius: 8px;
@@ -71,17 +32,24 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
-        .form-container button {
-            background-color: #28a745;
+        .form-container button, .controls button, .cloud-sync button {
+            background-color: #007bff;
             color: white;
             padding: 10px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            width: 100%;
+            margin-right: 10px;
+            margin-bottom: 5px;
         }
-        .form-container button:hover {
-            background-color: #218838;
+        .form-container button:hover,
+        .controls button:hover,
+        .cloud-sync button:hover {
+            background-color: #0056b3;
+        }
+        .cloud-sync input[type="password"] {
+            width: 250px;
+            margin-right: 10px;
         }
         .filter-container {
             margin-bottom: 20px;
@@ -127,24 +95,9 @@
         .actions button:hover {
             background: #c82333;
         }
-        .controls {
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-        }
-        .controls button {
-            flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
         .save-btn {
             background-color: #007bff;
             color: white;
-        }
-        .save-btn:hover {
-            background-color: #0056b3;
         }
         .clear-btn {
             background-color: #6c757d;
@@ -153,10 +106,40 @@
         .clear-btn:hover {
             background-color: #5a6268;
         }
+        .note {
+            color: #888;
+            font-size: 0.95em;
+            margin-bottom: 10px;
+        }
+        @media (max-width: 600px) {
+            .form-container, .controls, .cloud-sync {
+                padding: 10px;
+            }
+            th, td {
+                padding: 6px;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>Travel Save List</h1>
+    <h1>Travel Save List 🌍</h1>
+    <div class="note">
+        <b>Cloud Sync:</b> Enter your GitHub Personal Access Token to load/save your list from your repo.<br>
+        <b>Token is stored in memory only and never uploaded.</b> <br>
+        <a href="https://github.com/settings/tokens" target="_blank">Generate a GitHub token</a> with <code>public_repo</code> scope.<br>
+        <b>For your personal use only!</b>
+    </div>
+    <div class="cloud-sync">
+        <label for="githubToken">GitHub Token:</label>
+        <input type="password" id="githubToken" placeholder="Paste your GitHub PAT here" autocomplete="off">
+        <button onclick="setToken()">Set Token</button>
+        <button onclick="removeToken()">Remove Token</button>
+        <br><br>
+        <button onclick="loadFromGitHub()">Load from GitHub</button>
+        <button onclick="saveToGitHub()">Save to GitHub</button>
+        <span id="cloudStatus" class="note"></span>
+    </div>
+
     <div class="form-container">
         <select id="continent" required>
             <option value="" disabled selected>Select Continent</option>
@@ -193,15 +176,97 @@
         <tbody id="travelTableBody"></tbody>
     </table>
     <div class="controls">
-        <button class="save-btn" onclick="saveTimetable()">Save Timetable</button>
-        <button class="clear-btn" onclick="clearTimetable()">Clear Timetable</button>
+        <button class="save-btn" onclick="saveTimetable()">Save Locally</button>
+        <button class="clear-btn" onclick="clearTimetable()">Clear Local</button>
+        <button class="save-btn" onclick="exportToFile()">Export</button>
+        <button class="save-btn" onclick="document.getElementById('importFile').click()">Import</button>
+        <input type="file" id="importFile" style="display:none" accept=".json" onchange="importFromFile(event)">
     </div>
 
     <script>
+        // ---- Cloud Sync Variables ----
+        const githubUsername = "lhwongn-bot";
+        const githubRepo = "TravelSAFE";
+        const githubFilePath = "travel-save-list.json";
+        // Token is held in memory only
+        let githubToken = "";
+
+        // ---- Cloud Sync Token Management ----
+        function setToken() {
+            githubToken = document.getElementById('githubToken').value.trim();
+            if (githubToken) {
+                document.getElementById('cloudStatus').textContent = "Token set in memory.";
+            } else {
+                document.getElementById('cloudStatus').textContent = "No token set!";
+            }
+        }
+        function removeToken() {
+            githubToken = "";
+            document.getElementById('githubToken').value = "";
+            document.getElementById('cloudStatus').textContent = "Token cleared from memory.";
+        }
+
+        // ---- Cloud Sync Functions ----
+        async function loadFromGitHub() {
+            setStatus("Loading from GitHub...");
+            if (!githubToken) { setStatus("Token required!"); return; }
+            const url = `https://api.github.com/repos/${githubUsername}/${githubRepo}/contents/${githubFilePath}`;
+            try {
+                const response = await fetch(url, {
+                    headers: { "Authorization": `token ${githubToken}` }
+                });
+                if (!response.ok) { setStatus("Failed to load from GitHub."); return; }
+                const data = await response.json();
+                const content = atob(data.content.replace(/\n/g, ""));
+                localStorage.setItem('travelSaveList', content);
+                loadTimetable();
+                updateCountryFilter();
+                setStatus("Loaded from GitHub!");
+            } catch (e) {
+                setStatus("Failed to load from GitHub.");
+            }
+        }
+        async function saveToGitHub() {
+            setStatus("Saving to GitHub...");
+            if (!githubToken) { setStatus("Token required!"); return; }
+            const url = `https://api.github.com/repos/${githubUsername}/${githubRepo}/contents/${githubFilePath}`;
+            let sha = null;
+            try {
+                const response = await fetch(url, {
+                    headers: { "Authorization": `token ${githubToken}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    sha = data.sha;
+                }
+            } catch (e) {} // ignore if file doesn't exist
+            const content = btoa(unescape(encodeURIComponent(localStorage.getItem('travelSaveList') || "[]")));
+            const result = await fetch(url, {
+                method: "PUT",
+                headers: {
+                    "Authorization": `token ${githubToken}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    message: "Cloud sync TravelSAFE list",
+                    content: content,
+                    ...(sha ? { sha } : {})
+                })
+            });
+            if (result.ok) {
+                setStatus("Saved to GitHub!");
+            } else {
+                setStatus("Failed to save to GitHub.");
+            }
+        }
+        function setStatus(msg) {
+            document.getElementById('cloudStatus').textContent = msg;
+        }
+
+        // ---- Local App ----
         let sortDirection = {};
         let originalData = [];
 
-        // Load saved entries and populate country filter on page load
         document.addEventListener('DOMContentLoaded', () => {
             loadTimetable();
             updateCountryFilter();
@@ -232,7 +297,6 @@
             `;
             tableBody.appendChild(row);
 
-            // Clear form inputs
             document.getElementById('continent').value = '';
             document.getElementById('country').value = '';
             document.getElementById('location').value = '';
@@ -318,11 +382,8 @@
         }
 
         function sortTable(columnIndex, type) {
-            const tableBody = document.getElementById('travelTableBody');
-            const rows = Array.from(tableBody.getElementsByTagName('tr'));
             const key = ['completed', 'continent', 'country', 'location', 'famous'][columnIndex];
-            sortDirection[key] = !sortDirection[key]; // Toggle sort direction
-
+            sortDirection[key] = !sortDirection[key];
             const sortedData = originalData.slice().sort((a, b) => {
                 let valA = type === 'checkbox' ? a[key] : a[key].toLowerCase();
                 let valB = type === 'checkbox' ? b[key] : b[key].toLowerCase();
@@ -331,7 +392,6 @@
                 }
                 return sortDirection[key] ? valA.localeCompare(valB) : valB.localeCompare(valA);
             });
-
             renderTable(sortedData);
         }
 
@@ -343,6 +403,35 @@
                 updateCountryFilter();
             }
         }
+
+        // ---- Export/Import ----
+        function exportToFile() {
+            const data = localStorage.getItem('travelSaveList');
+            const blob = new Blob([data], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "travel-save-list.json";
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        function importFromFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    localStorage.setItem('travelSaveList', e.target.result);
+                    loadTimetable();
+                    updateCountryFilter();
+                    alert('Imported successfully!');
+                } catch {
+                    alert('Import failed. Check your file format.');
+                }
+            };
+            reader.readAsText(file);
+        }
+
     </script>
 </body>
 </html>
